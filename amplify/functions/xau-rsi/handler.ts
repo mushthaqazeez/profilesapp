@@ -1,27 +1,43 @@
 import axios from 'axios';
 import { RSI } from 'technicalindicators';
 
+const KEY  = process.env.T12_KEY!;
 const BOT  = process.env.TG_BOT!;
 const CHAT = process.env.TG_CHAT!;
 
 export const handler = async () => {
-  // 1) closed candles
-  const { data } = await axios.get('https://api.binance.com/api/v3/klines', {
-    params: { symbol: 'XAUUSDT', interval: '1h', limit: 100 }
-  });
-  const closes = data.slice(0, -1).map((c: any[]) => +c[4]);  // drop live bar
+  /* 1) Grab 100 one-hour candles from Twelve Data */
+  const { data } = await axios.get(
+    'https://api.twelvedata.com/time_series',
+    {
+      params: {
+        symbol:    'XAU/USD',
+        interval:  '1h',
+        outputsize: 100,
+        apikey:    KEY
+      }
+    }
+  );
 
-  // 2) RSI(14)
-  const r = RSI.calculate({ values: closes, period: 14 });
-  const prev = r.at(-2)!;
-  const curr = r.at(-1)!;
+  if (data.status === 'error') {
+    throw new Error(`TwelveData error: ${data.message || JSON.stringify(data)}`);
+  }
 
-  // 3) alert on upward cross
+  // data.values comes newest-first; reverse so oldest->newest
+  const closes = data.values.map((v:any) => +v.close).reverse();
+
+  /* 2) Compute RSI-14 */
+  const rsiSeries = RSI.calculate({ values: closes, period: 14 });
+  const prev = rsiSeries.at(-2)!;
+  const curr = rsiSeries.at(-1)!;
+
+  /* 3) Alert on cross ≥ 60 */
   if (prev < 60 && curr >= 60) {
     await axios.post(
       `https://api.telegram.org/bot${BOT}/sendMessage`,
-      { chat_id: CHAT, text: `⚠️  XAU/USD 1-h RSI crossed 60 → ${curr.toFixed(1)}` }
+      { chat_id: CHAT, text: `⚠️ XAU/USD 1-h RSI crossed 60 → ${curr.toFixed(1)}` }
     );
   }
+
   return { prev, curr };
 };
